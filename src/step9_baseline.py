@@ -11,6 +11,8 @@ recordings the model has never seen. We report the mean and spread over the
 five test groups.
 """
 import time
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +33,9 @@ except ImportError as e:   # a Windows-blocked DLL shows up as an ImportError
 ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "data" / "processed" / "LOS_PIFA_cut12.npz"   # made by step 8
 FIG = ROOT / "results" / "figures"
+if len(sys.argv) > 1:   # on Google Colab: python step9_baseline.py /content/LOS_PIFA_cut12.npz
+    DATASET = Path(sys.argv[1])
+    FIG = DATASET.parent
 CLASS_NAMES = ["Empty room", "Walking", "Walking + arm-waving"]
 
 FEATURE_SETS = {                       # which channels of the image to use

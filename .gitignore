@@ -4,3 +4,7 @@ __pycache__/
 *.pt
 *.pth
 .ipynb_checkpoints/
+*.pyc
+results/models/
+.vscode/
+*.zip
