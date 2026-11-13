@@ -1,0 +1,117 @@
+"""
+step4_spectrum_lowpass.py - Step 4: where does the movement energy live in
+frequency, and a Butterworth low-pass filter to remove the rest.
+
+Prints the frequency below which 90 / 95 / 99 % of the signal power lies,
+and saves two figures.
+"""
+from pathlib import Path
+
+import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")  # draw straight into PNG files, no pop-up window
+import matplotlib.pyplot as plt
+from scipy import signal
+
+from csi_io import load_csi, amplitude
+from dsp import hampel, resample_uniform, butter_sos, butter_lowpass
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA = ROOT / "data" / "raw" / "wallhack1.8k" / "LOS" / "PIFA"
+FIG = ROOT / "results" / "figures"
+FIG.mkdir(parents=True, exist_ok=True)
+
+# ---- settings you can play with -------------------------------------------
+N_PACKETS = 6000   # about 60 seconds per class
+FS = 100.0         # sampling rate after resampling (Hz)
+CUTOFF = 20.0      # low-pass cutoff in Hz  <-- we will tune this from the plot
+ORDER = 4          # Butterworth order
+SC = 26            # subcarrier shown in the time-domain figure
+# ---------------------------------------------------------------------------
+
+FILES = {
+    "Empty room": "b1.csv",
+    "Walking": "w1.csv",
+    "Walking + arm-waving": "ww1.csv",
+}
+COLORS = {"Empty room": "tab:gray", "Walking": "tab:blue",
+          "Walking + arm-waving": "tab:red"}
+
+clean = {}      # cleaned + resampled amplitude, (M, 52)
+filtered = {}   # same, after the low-pass
+t_axis = {}
+for name, fn in FILES.items():
+    d = load_csi(DATA / fn, max_rows=N_PACKETS)
+    A = amplitude(d["csi"])
+    A, _ = hampel(A, 15, 4.0)
+    t, A = resample_uniform(d["timestamp_us"], A, FS)
+    clean[name] = A
+    t_axis[name] = t
+    filtered[name] = butter_lowpass(A, CUTOFF, FS, ORDER)
+
+
+def mean_psd(x):
+    """Power spectral density (Welch), averaged over the 52 subcarriers.
+
+    The mean of each subcarrier is removed first, so the plot shows only the
+    time-varying part (the static room pattern would otherwise dominate).
+    """
+    x0 = x - x.mean(axis=0)
+    f, p = signal.welch(x0, fs=FS, nperseg=256, axis=0)
+    return f, p.mean(axis=1)
+
+
+# ------------------------------------------------ numbers: where is the energy?
+print("Frequency below which this share of the signal power lies (DC excluded):")
+print(f"{'class':<22}{'90 %':>8}{'95 %':>8}{'99 %':>8}")
+for name, A in clean.items():
+    f, p = mean_psd(A)
+    cum = np.cumsum(p[1:]) / p[1:].sum()
+    marks = [f[1:][np.searchsorted(cum, q)] for q in (0.90, 0.95, 0.99)]
+    print(f"{name:<22}{marks[0]:>7.1f} {marks[1]:>7.1f} {marks[2]:>7.1f}   Hz")
+
+# -------------------------------------------- Figure 6: spectrum + filter shape
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
+for name in FILES:
+    f, p = mean_psd(clean[name])
+    ax1.semilogy(f, p, color=COLORS[name], lw=1.4, label=name)
+    f, p = mean_psd(filtered[name])
+    ax1.semilogy(f, p, color=COLORS[name], lw=1.0, ls="--")
+ax1.axvline(CUTOFF, color="k", ls=":", label=f"cutoff {CUTOFF:g} Hz")
+ax1.set_xlabel("Frequency (Hz)")
+ax1.set_ylabel("Power spectral density (log)")
+ax1.set_title("Spectrum of the amplitude (solid = before low-pass, dashed = after)")
+ax1.legend(fontsize=8)
+ax1.set_xlim(0, FS / 2)
+
+w, h = signal.sosfreqz(butter_sos(CUTOFF, FS, ORDER), worN=2048, fs=FS)
+ax2.plot(w, 20 * np.log10(np.abs(h) + 1e-12), label="single pass")
+ax2.plot(w, 40 * np.log10(np.abs(h) + 1e-12), label="forward-backward (what we use)")
+ax2.axvline(CUTOFF, color="k", ls=":")
+ax2.axhline(-3, color="gray", ls=":", lw=0.8)
+ax2.set_ylim(-80, 3)
+ax2.set_xlabel("Frequency (Hz)")
+ax2.set_ylabel("Gain (dB)")
+ax2.set_title(f"Butterworth low-pass, order {ORDER}, cutoff {CUTOFF:g} Hz")
+ax2.legend(fontsize=8)
+fig.savefig(FIG / "06_spectrum_and_filter.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+
+# ---------------------------------------------- Figure 7: before/after in time
+fig, axes = plt.subplots(3, 1, figsize=(10, 8), sharex=True, sharey=True)
+for ax, name in zip(axes, FILES):
+    t = t_axis[name]
+    ax.plot(t, clean[name][:, SC], color="lightgray", lw=1.0, label="before low-pass")
+    ax.plot(t, filtered[name][:, SC], color="tab:blue", lw=1.2,
+            label=f"after low-pass ({CUTOFF:g} Hz)")
+    ax.set_xlim(0, 15)
+    ax.set_ylabel("|H|")
+    ax.set_title(name, loc="left", fontsize=10)
+axes[0].legend(loc="lower right", fontsize=8)
+axes[-1].set_xlabel("Time (s)")
+fig.suptitle(f"Amplitude of subcarrier {SC}: effect of the Butterworth low-pass")
+fig.savefig(FIG / "07_lowpass_before_after.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+
+print(f"\nSaved figures 06 and 07 to {FIG}")
